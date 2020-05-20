@@ -1,20 +1,23 @@
 import requests
 import json
 import getpass
-from datetime import datetime
+import datetime
 from collections import defaultdict
+import pandas as pd
 
 class degiro:
     def __init__(self):
         self.user = dict()
         self.data = None
     
-    def login(self, conf_path=None, with2fa:bool=False):
-        if(conf_path==None):
+    def login(self, username=None, password=None, with2fa:bool=False):
+        if(username==None or password==None):
             conf = dict(username=input("Username: "), password=getpass.getpass())
         else:
-            conf = json.load(open(conf_path))
+            conf = {"username": username, "password": password}
         self.sess = requests.Session()
+        # Adding headers to be more stealth
+        self.sess.headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:75.0) Gecko/20100101 Firefox/75.0'}
         
         # Login
         url = 'https://trader.degiro.nl/login/secure/login'
@@ -31,12 +34,16 @@ class degiro:
         print('Login')
         print('\tStatus code: {}'.format(r.status_code))
 
-        # Get session id
-        self.sessid = r.headers['Set-Cookie']
-        self.sessid = self.sessid.split(';')[0]
-        self.sessid = self.sessid.split('=')[1]
-
-        print('\tSession id: {}'.format(self.sessid))
+        if r.status_code == 200:
+          print('\tLogin successful!')
+          # Get session id
+          self.sessid = r.headers['Set-Cookie']
+          self.sessid = self.sessid.split(';')[0]
+          self.sessid = self.sessid.split('=')[1]
+          print('\tSession id: {}'.format(self.sessid))
+        else:
+          print('Login failed.')
+          return r
         
     # This contain loads of user data, main interest here is the 'intAccount'
     def getConfig(self):
@@ -147,6 +154,7 @@ class degiro:
 
         return portf_n
 
+    # THIS DOESN'T WORK
     # Returns all account transactions
     #  fromDate and toDate are strings in the format: dd/mm/yyyy
     def getAccountOverview(self, fromDate, toDate):
@@ -179,7 +187,37 @@ class degiro:
             movs.append(mov)        
         return movs
 
+    _today = datetime.date.today().strftime("%d/%m/%Y")
+    _fourWeeksAgo = (datetime.date.today() - datetime.timedelta(weeks=4)).strftime("%d/%m/%Y")
 
+    def getTransactionsHttp(self, fromDate=_fourWeeksAgo, toDate=_today):
+        url = 'https://trader.degiro.nl/reporting/secure/v3/transactionReport/csv'
+        payload = {'intAccount': self.user['intAccount'],
+                   'sessionId': self.sessid,
+                   'country': "SE", # Changing this makes no difference
+                   'lang':"sv", # Changing this doesn't actually change the language
+                   'fromDate': fromDate,
+                   'toDate': toDate
+                  }
+        r = self.sess.get(url, params=payload)
+        return r
+
+    def getTransactions(self, fromDate=_fourWeeksAgo, toDate=_today):
+        url = 'https://trader.degiro.nl/reporting/secure/v3/transactionReport/csv'
+        url+= '?intAccount=' + str(self.user['intAccount'])
+        url+= '&sessionId=' + str(self.sessid)
+        url+= '&country=SE&lang=sv'
+        url+= '&fromDate=' + fromDate.replace("/", "%2F")
+        url+= '&toDate=' + toDate.replace("/","%2F")
+        transactions = pd.read_csv(url)
+        return transactions
+      
+    def getOrders(self):
+      df = pd.json_normalize(data=self.data["orders"]["value"], record_path="value", meta="id")
+      df = df.pivot(index='id', columns='name', values='value')
+      df = df.drop(axis="columns", labels=["contractSize","contractType","id","isDeletable", "isModifiable"])
+      return df
+        
 if __name__ =='__main__':
     deg = degiro()
     deg.login(with2fa=True)
